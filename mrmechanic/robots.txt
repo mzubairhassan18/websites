@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mzubairhassan18.github.io/websites/mrmechanic/sitemap.xml
