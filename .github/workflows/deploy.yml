@@ -1,0 +1,97 @@
+name: Deploy sites to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # Site #1: the site at the repo root is published at
+      #   https://<user>.github.io/<repo>/
+      # Site #2..n: any subfolder under sites/ that contains an index.html
+      # is published at
+      #   https://<user>.github.io/<repo>/<folder>/
+      - name: Assemble sites
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+
+          echo "== Copying root site (if present) =="
+          for f in index.html styles.css app.js assets; do
+            if [ -e "$f" ]; then
+              echo "  root: $f"
+              cp -r "$f" _site/
+            fi
+          done
+
+          echo "== Copying sub-sites from sites/ =="
+          if [ -d sites ]; then
+            for dir in sites/*/; do
+              [ -d "$dir" ] || continue
+              name="$(basename "$dir")"
+              if [ -f "$dir/index.html" ]; then
+                echo "  site: $name"
+                cp -r "$dir" "_site/$name"
+                # Repo docs stay in git but are not published with the site.
+                rm -f "_site/$name/RESEARCH.md" "_site/$name/README.md"
+              fi
+            done
+          fi
+
+          # Root landing page. Only generated when the repo has no site of its own
+          # at the root — otherwise it would clobber the real index.html.
+          extra=$(ls -A _site | grep -v -e '^\.' || true)
+          if [ ! -f _site/index.html ] && [ -n "$extra" ]; then
+            {
+              echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+              echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+              echo '<title>Sites</title><style>'
+              echo 'body{font-family:system-ui,sans-serif;background:#0f1115;color:#e8eaed;margin:0;padding:64px 24px}'
+              echo 'a{display:block;padding:14px 16px;background:#1a1d24;border:1px solid #262a33;border-radius:10px;color:#e8eaed;text-decoration:none;margin-bottom:10px;max-width:420px}'
+              echo '</style></head><body><h1>Sites</h1>'
+              for name in $extra; do
+                echo "<a href=\"./$name/\">$name</a>"
+              done
+              echo '</body></html>'
+            } > _site/index.html
+          fi
+
+          # GitHub Pages should serve files as-is, no Jekyll processing.
+          touch _site/.nojekyll
+
+          echo "--- _site contents ---"
+          find _site -maxdepth 2 | sort
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

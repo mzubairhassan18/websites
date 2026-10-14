@@ -1,0 +1,7 @@
+# Deploy output
+_site/
+
+# Local server / tooling
+*.log
+.DS_Store
+Thumbs.db
