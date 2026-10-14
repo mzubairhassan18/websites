@@ -1,14 +1,18 @@
 name: Deploy sites to GitHub Pages
 
+# Builds every site into _site/ and force-pushes it to the `gh-pages` branch.
+# GitHub Pages is configured to serve that branch (Settings → Pages → Deploy from
+# a branch), so this workflow never fights with the Pages build mode.
+#
+# Publishing to a *public* repository's standard runners is free.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -20,15 +24,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      # Site #1: the site at the repo root is published at
-      #   https://<user>.github.io/<repo>/
-      # Site #2..n: any subfolder under sites/ that contains an index.html
-      # is published at
-      #   https://<user>.github.io/<repo>/<folder>/
+      # Site at the repo root publishes to  https://<user>.github.io/<repo>/
+      # Each sites/<name>/ folder publishes to  https://<user>.github.io/<repo>/<name>/
       - name: Assemble sites
         run: |
           set -euo pipefail
@@ -58,16 +58,23 @@ jobs:
 
           # Root landing page. Only generated when the repo has no site of its own
           # at the root — otherwise it would clobber the real index.html.
-          extra=$(ls -A _site | grep -v -e '^\.' || true)
-          if [ ! -f _site/index.html ] && [ -n "$extra" ]; then
+          # NOTE: list the entries BEFORE redirecting into _site/index.html, otherwise
+          # the shell creates the (empty) output file first and it shows up in the list.
+          sub_sites=""
+          if [ ! -f _site/index.html ]; then
+            sub_sites="$(ls -A _site | grep -v -e '^\.' || true)"
+          fi
+          if [ -n "$sub_sites" ]; then
             {
               echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
               echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
               echo '<title>Sites</title><style>'
               echo 'body{font-family:system-ui,sans-serif;background:#0f1115;color:#e8eaed;margin:0;padding:64px 24px}'
+              echo 'h1{font-weight:600}'
               echo 'a{display:block;padding:14px 16px;background:#1a1d24;border:1px solid #262a33;border-radius:10px;color:#e8eaed;text-decoration:none;margin-bottom:10px;max-width:420px}'
+              echo 'a:hover{border-color:#3d434f}'
               echo '</style></head><body><h1>Sites</h1>'
-              for name in $extra; do
+              for name in $sub_sites; do
                 echo "<a href=\"./$name/\">$name</a>"
               done
               echo '</body></html>'
@@ -80,18 +87,25 @@ jobs:
           echo "--- _site contents ---"
           find _site -maxdepth 2 | sort
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish to gh-pages
+        run: |
+          set -euo pipefail
+          # Publish _site/ as the entire content of the gh-pages branch,
+          # without touching the working tree used by this job.
+          work="$(mktemp -d)"
+          git clone --quiet --no-checkout "file://${{ github.workspace }}" "$work/repo"
+          cd "$work/repo"
+          git checkout --quiet --orphan gh-pages
+          git rm -rq --cached . 2>/dev/null || true
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -r "${{ github.workspace }}/_site/." .
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "Publish sites from ${GITHUB_SHA}" || {
+            echo "No changes to publish."
+            exit 0
+          }
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
